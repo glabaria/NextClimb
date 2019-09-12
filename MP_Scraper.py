@@ -7,6 +7,7 @@ import time
 import psycopg2
 import requests
 import json
+import pickle
 
 class MP_Scraper(object):
     def __init__(self,
@@ -33,6 +34,13 @@ class MP_Scraper(object):
         self.routes_table = db.Table('routes', self.metadata, autoload=True, autoload_with=self.engine)
         
         self.mp_api_key = mp_api_key
+        
+        self.route_id_dict = {}
+        self.user_id_dict = {}
+        #self.user_route_rating_dict = {}
+        
+        self.route_id_dict = pickle.load( open( "route_table.p", "rb" ) )
+        self.user_id_dict = pickle.load( open( "user_table.p", "rb" ) )
         
         if initialize_db:
             table_ini_files = ['create_route_table.ini',
@@ -222,7 +230,7 @@ class MP_Scraper(object):
     def get_id(self,link):
         sep = link.split('/')
             
-        return sep[-2] #id is always 2nd to last in this delimiter
+        return int(sep[-2]) #id is always 2nd to last in this delimiter
 
     def scrape_MP(self):
         #[master_content, master_link, master_name] = self.find_master_area()
@@ -239,22 +247,24 @@ class MP_Scraper(object):
         ids,route_links = self.get_all_route_ids_links(route_link)
         
         #add information for routes database
-        query = db.insert(self.routes_table)
+        #query = db.insert(self.routes_table)
         
         
-        self.connection.execute(query,[{'route_id': id_} for id_ in ids])
+        #self.connection.execute(query,[{'route_id': id_} for id_ in ids])
         
         for i in range(len(ids)):
-            self.scrape_route_data(ids[i],route_link[i])
+            if ids[i] not in self.route_id_dict:
+                self.scrape_route_data(ids[i],route_link[i])
+                self.get_users_who_rated_route(route_link[i],ids[i])
         #end add information for routes database
-        
-        #add users who rated each route and their rating
-        for link in route_link:
-            self.get_users_who_rated_route(link)
-        #
         
         self.connection.close()
         self.engine.dispose()
+        
+        #pickle dump
+        pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
+        pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
+        #
         
         set_trace()
             
@@ -315,15 +325,56 @@ class MP_Scraper(object):
         route_long = json_data['longitude']
         route_lat = json_data['latitude']
         
-        query = db.update(self.routes_table).values(route_name = route_name)
-        query = query.where(self.routes_table.columns.route_id == id_)
-        self.connection.execute(query)
+        #query = db.update(self.routes_table).values(route_name = route_name)
+        #query = query.where(self.routes_table.columns.route_id == id_)
+        #self.connection.execute(query)
         
-    #input link of route page
-    def get_users_who_rated_route(self,link):
+        self.route_id_dict[id_] = {'route_name': route_name, 
+                                   'route_rating': route_rating,
+                                   'route_type': route_type,
+                                   'route_avg_stars': route_avg_stars,
+                                   'route_n_star_votes':route_n_star_votes,
+                                   'route_pitches':route_pitches,
+                                   'route_location':route_location,
+                                   'route_long':route_long,
+                                   'route_lat':route_lat,
+                                   'url':link}
+        
+    #input link of route page, outputs all the users and their ratings for that particular route
+    def get_users_who_rated_route(self,link,route_id):
         
         #stat page of route
         stats_link = link[:37]+'/stats'+link[37:]
+        
+        r = requests.get(stats_link)
+
+        soup = BeautifulSoup(r.text,'html5lib')
+                
+        content = soup.find('table',\
+                           class_='table table-striped')
+        
+        table_rows = content.find_all('tr')
+        
+        #go through the ratings and add them to list
+        #user_link = []
+        #nstars = []
+        for i in range(len(table_rows)):
+            table_data = table_rows[i].find_all('td')
+            
+            #all user links
+            user_link = table_data[0].find('a')['href']
+            user_id = self.get_id(user_link)
+            
+            user_star_rating = len(table_data[1].find_all('img'))
+            
+            if user_id not in self.user_id_dict:
+                self.user_id_dict[user_id] = {route_id:user_star_rating}
+            else:
+                self.user_id_dict[user_id][route_id] = user_star_rating
+            
+            #the corresponding user star rating of route
+            #nstars.append(len(table_data[1].find_all('img')))
+        
         
 #    def scrape_MP(self):
 #        
