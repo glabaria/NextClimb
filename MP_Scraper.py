@@ -2,12 +2,17 @@ from bs4 import BeautifulSoup
 from urllib.request import urlopen
 from configparser import ConfigParser
 from IPython.core.debugger import set_trace
+import sqlalchemy as db
 import time
 import psycopg2
+import requests
+import json
 
 class MP_Scraper(object):
     def __init__(self,
                  route_page,
+                 postgre_address,
+                 mp_api_key,
                  start_ind=0,
                  stop_ind=-1,
                  urlopen_delay=0.0001,
@@ -21,6 +26,13 @@ class MP_Scraper(object):
         self.urlopen_delay = urlopen_delay
         self.verbatim = verbatim
         self.is_area_complete_dict = {}
+        
+        self.engine = db.create_engine(postgre_address)
+        self.connection = self.engine.connect()
+        self.metadata = db.MetaData()
+        self.routes_table = db.Table('routes', self.metadata, autoload=True, autoload_with=self.engine)
+        
+        self.mp_api_key = mp_api_key
         
         if initialize_db:
             table_ini_files = ['create_route_table.ini',
@@ -225,8 +237,28 @@ class MP_Scraper(object):
             print('time elapsed = ',end-start)
             
         ids,route_links = self.get_all_route_ids_links(route_link)
+        
+        #add information for routes database
+        query = db.insert(self.routes_table)
+        
+        
+        self.connection.execute(query,[{'route_id': id_} for id_ in ids])
+        
+        for i in range(len(ids)):
+            self.scrape_route_data(ids[i],route_link[i])
+        #end add information for routes database
+        
+        #add users who rated each route and their rating
+        for link in route_link:
+            self.get_users_who_rated_route(link)
+        #
+        
+        self.connection.close()
+        self.engine.dispose()
+        
         set_trace()
             
+    #TODO
     def find_master_area(self, dirurl = 'https://www.mountainproject.com/route-guide'):
         
         content_route_dir, link_route_dir, text_route_dir = \
@@ -265,6 +297,34 @@ class MP_Scraper(object):
             return sum(map(self.flatten, nested), [])
         return nested
     
+    def scrape_route_data(self,id_,link):
+        
+        url = 'https://www.mountainproject.com/data/get-routes?routeIds='+str(id_)+'&key='+self.mp_api_key
+        
+        r = requests.get(url)
+        json_data = r.json()
+        json_data = json_data['routes'][0]
+        
+        route_name = json_data['name']
+        route_rating = json_data['rating']
+        route_type = json_data['type']
+        route_avg_stars = json_data['stars']
+        route_n_star_votes = json_data['starVotes']
+        route_pitches = json_data['pitches']
+        route_location = json_data['location']
+        route_long = json_data['longitude']
+        route_lat = json_data['latitude']
+        
+        query = db.update(self.routes_table).values(route_name = route_name)
+        query = query.where(self.routes_table.columns.route_id == id_)
+        self.connection.execute(query)
+        
+    #input link of route page
+    def get_users_who_rated_route(self,link):
+        
+        #stat page of route
+        stats_link = link[:37]+'/stats'+link[37:]
+        
 #    def scrape_MP(self):
 #        
 #        content_route_dir, link_route_dir, text_route_dir = \
