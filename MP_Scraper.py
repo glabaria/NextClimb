@@ -1,21 +1,23 @@
 from bs4 import BeautifulSoup
 from urllib.request import urlopen
 from configparser import ConfigParser
+from IPython.core.debugger import set_trace
 import time
 import psycopg2
 
 class MP_Scraper(object):
     def __init__(self,
                  route_page,
-                 start_ind_vect=0,
-                 stop_ind_vect=-1,
-                 urlopen_delay=0.001,
+                 start_ind=0,
+                 stop_ind=-1,
+                 urlopen_delay=0.0001,
                  verbatim=False,
                  initialize_db=False):
         
         page = urlopen(route_page)
         self.root_soup = BeautifulSoup(page,'html.parser')
-        self.stop_ind_vect = stop_ind_vect
+        self.stop_ind = stop_ind
+        self.start_ind = start_ind
         self.urlopen_delay = urlopen_delay
         self.verbatim = verbatim
         self.is_area_complete_dict = {}
@@ -105,12 +107,18 @@ class MP_Scraper(object):
     '''
     def get_route_level_data(self, soup, tag, class_name, id_name='', 
                              start_ind=0, stop_ind=-1, is_route_level=False):
+        
+        #set_trace()
+        
         if not id_name:
             content = soup.find_all(tag,class_=class_name)
         else:
             content = soup.find_all(tag,class_=class_name,id=id_name)
         
         counter = 0
+        
+        if not content:
+            return [None, None, None]
         
         link_list = []
         text_list = []
@@ -148,52 +156,161 @@ class MP_Scraper(object):
             
         return content, link_list, text_list
         
+    def get_route_level_data_helper(self, soup, start_ind=0, stop_ind=-1):
+        #set_trace()
+        content_area, link_area, text_area = \
+            self.get_route_level_data(soup,'div','lef-nav-row',\
+                                      start_ind=start_ind,stop_ind=stop_ind)
+    
+        content_route, link_route, text_route = \
+            self.get_route_level_data(soup,'table','width100',id_name='left-nav-route-table',\
+                                      is_route_level=True,start_ind=start_ind,stop_ind=stop_ind)
+    
+        return content_area, link_area, text_area, \
+                   content_route, link_route, text_route
+    
+    def get_children(self,soup,start_ind=0,stop_ind=-1,is_root=False):
+        if is_root:
+            content_area, link_area, text_area, \
+                content_route, link_route, text_rout = \
+                    self.get_route_level_data_helper(soup,start_ind=start_ind,stop_ind=stop_ind)
+        else:
+            content_area, link_area, text_area,\
+                content_route, link_route, text_route = \
+                    self.get_route_level_data_helper(soup,start_ind=0,stop_ind=-1)
+                    
+        #set_trace()
+        if link_area:
+            #print(link_area)
+            
+            link_master = []
+            text_master = []
+        
+            for laind in range(len(link_area)):            
+                time.sleep(self.urlopen_delay)
+                curr_soup = BeautifulSoup(urlopen(link_area[laind]),'html.parser')
+                
+                #set_trace()
+                
+                #if link_area == ['https://www.mountainproject.com/area/108533355/little-eastatoee']:
+                #    set_trace()
+                    
+                [link, text] = self.get_children(curr_soup)
+                link_master.append([link_area[laind], link])
+                text_master.append([text_area[laind], text])
+                
+            return [link_master, text_master]
+        
+        if link_route:
+            return [link_route, text_route]
+        else:
+            return [None,None]
+        
+    #extract route of area id from MP URL
+    def get_id(self,link):
+        sep = link.split('/')
+            
+        return sep[-2] #id is always 2nd to last in this delimiter
+
     def scrape_MP(self):
+        #[master_content, master_link, master_name] = self.find_master_area()
+        
+        start = time.time()
+        [route_link,route_name] = self.get_children(self.root_soup)
+        end = time.time()
+        
+        if self.verbatim:
+            #print('master areas:',master_name)
+            print(route_name)
+            print('time elapsed = ',end-start)
+            
+        ids,route_links = self.get_all_route_ids_links(route_link)
+        set_trace()
+            
+    def find_master_area(self, dirurl = 'https://www.mountainproject.com/route-guide'):
         
         content_route_dir, link_route_dir, text_route_dir = \
-            self.get_route_level_data(self.root_soup,'div','mb-half',stop_ind=self.stop_ind_vect[0])
+            self.get_route_level_data(BeautifulSoup(urlopen(dirurl),'html.parser'),'div','mb-half',stop_ind=50)           
+    
+    def get_all_route_ids_links(self,route_link):
+        route_links = self.flatten(self.extract_routes(route_link))
+        #set_trace()
+        
+        #clean out all Nons
+        route_links = [y for y in route_links if y != None]
+        
+        route_ids = []
+        for link in route_links:
+
+            route_ids.append(int(self.get_id(link)))
             
-        for rdind in range(len(link_route_dir)):
-            if self.verbatim:
-                print(text_route_dir[rdind], link_route_dir[rdind])
-            
-            time.sleep(self.urlopen_delay)
-            state_soup = BeautifulSoup(urlopen(link_route_dir[rdind]),'html.parser')
-            
-            #get data for climbing regions within state
-            content_region, link_region, text_region = self.get_route_level_data(state_soup,'div','lef-nav-row',stop_ind=2)
-            
-            for regind in range(len(link_region)):
-                if self.varbatim:
-                    print('\t',text_region[regind],link_region[regind])
-                
-                time.sleep(self.urlopen_delay)
-                reg_soup = BeautifulSoup(urlopen(link_region[regind]),'html.parser')
-                
-                content_area, link_area, text_area = \
-                    self.get_route_level_data(reg_soup,'div','lef-nav-row')
-                
-                #if content area is empty, check for routes instead
-                if not content_area:
-                    #set_trace()
-                    content_route, link_route, text_route = \
-                        self.get_route_level_data(reg_soup,'table','width100',id_name='left-nav-route-table',is_route_level=True)
-                        
-                    #set_trace()
-                    for routeind in range(len(text_route)):
-                        if self.verbatim:
-                            print('\t\t\t',text_route[routeind],link_route[routeind])
+        return route_ids,route_links
+    
+    #extract_routes and flatten get only the routes (lead nodes of the area-route tree)
+    def extract_routes(self,nest):
+        if isinstance(nest,list):
+            if len(nest)>1:
+                if not isinstance(nest[0],list) and isinstance(nest[1],list):
+                    return [self.extract_routes(l) for l in nest[1]]
                 else:
-                    for areaind in range(len(content_area)):
-                        if self.verbatim:
-                            print('\t\t',text_area[areaind],link_area[areaind])
-                        
-                        time.sleep(self.urlopen_delay)
-                        area_soup = BeautifulSoup(urlopen(link_area[areaind]),'html.parser')
-                        
-                        #set_trace()
-                        content_route, link_route, text_route = \
-                            self.get_route_level_data(area_soup,'table','width100',id_name='left-nav-route-table',is_route_level=True)
-                        
-                        for routeind in range(len(text_route)):
-                            print('\t\t\t',text_route[routeind],link_route[routeind])
+                    return [self.extract_routes(l) for l in nest]
+            else:
+                return nest
+        else:
+            if nest:
+                return nest
+            
+    def flatten(self,nested):
+        if all(type(x) == list for x in nested):
+            return sum(map(self.flatten, nested), [])
+        return nested
+    
+#    def scrape_MP(self):
+#        
+#        content_route_dir, link_route_dir, text_route_dir = \
+#            self.get_route_level_data(self.root_soup,'div','mb-half',stop_ind=self.stop_ind_vect[0])
+#            
+#        for rdind in range(len(link_route_dir)):
+#            if self.verbatim:
+#                print(text_route_dir[rdind], link_route_dir[rdind])
+#            
+#            time.sleep(self.urlopen_delay)
+#            state_soup = BeautifulSoup(urlopen(link_route_dir[rdind]),'html.parser')
+#            
+#            #get data for climbing regions within state
+#            content_region, link_region, text_region = self.get_route_level_data(state_soup,'div','lef-nav-row',stop_ind=2)
+#            
+#            for regind in range(len(link_region)):
+#                if self.varbatim:
+#                    print('\t',text_region[regind],link_region[regind])
+#                
+#                time.sleep(self.urlopen_delay)
+#                reg_soup = BeautifulSoup(urlopen(link_region[regind]),'html.parser')
+#                
+#                content_area, link_area, text_area = \
+#                    self.get_route_level_data(reg_soup,'div','lef-nav-row')
+#                
+#                #if content area is empty, check for routes instead
+#                if not content_area:
+#                    #set_trace()
+#                    content_route, link_route, text_route = \
+#                        self.get_route_level_data(reg_soup,'table','width100',id_name='left-nav-route-table',is_route_level=True)
+#                        
+#                    #set_trace()
+#                    for routeind in range(len(text_route)):
+#                        if self.verbatim:
+#                            print('\t\t\t',text_route[routeind],link_route[routeind])
+#                else:
+#                    for areaind in range(len(content_area)):
+#                        if self.verbatim:
+#                            print('\t\t',text_area[areaind],link_area[areaind])
+#                        
+#                        time.sleep(self.urlopen_delay)
+#                        area_soup = BeautifulSoup(urlopen(link_area[areaind]),'html.parser')
+#                        
+#                        #set_trace()
+#                        content_route, link_route, text_route = \
+#                            self.get_route_level_data(area_soup,'table','width100',id_name='left-nav-route-table',is_route_level=True)
+#                        
+#                        for routeind in range(len(text_route)):
+#                            print('\t\t\t',text_route[routeind],link_route[routeind])
