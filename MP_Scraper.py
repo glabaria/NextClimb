@@ -230,8 +230,15 @@ class MP_Scraper(object):
     #extract route of area id from MP URL
     def get_id(self,link):
         sep = link.split('/')
-            
-        return int(sep[-2]) #id is always 2nd to last in this delimiter
+        
+        id_ = sep[-2] #id should be 2nd to last element
+        try: 
+            int(id_)
+            return int(id_)
+        except ValueError:
+            return None
+        
+        #return int(sep[-2]) #id is always 2nd to last in this delimiter
 
     def scrape_MP(self):
         #[master_content, master_link, master_name] = self.find_master_area()
@@ -286,7 +293,7 @@ class MP_Scraper(object):
         pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
         #
         
-        set_trace()
+        #set_trace()
             
     #TODO
     def find_master_area(self, dirurl = 'https://www.mountainproject.com/route-guide'):
@@ -301,13 +308,21 @@ class MP_Scraper(object):
         
         route_ids = []
         
-        #clean out all Nons
+        #clean out all Nones
         if isinstance(route_links,list):
+            for i in range(len(route_links)):
+                link = route_links[i]
+                
+                if link == None:
+                    continue
+                
+                #for some reason, some non-route links make it through, delete these
+                if 'route' not in link.split('/'):
+                    route_links[i] = None
+                else:
+                    route_ids.append(int(self.get_id(link)))
+                    
             route_links = [y for y in route_links if y != None]
-        
-            for link in route_links:
-
-                route_ids.append(int(self.get_id(link)))
         else:
             route_ids.append(int(self.get_id(route_links)))
             
@@ -406,6 +421,11 @@ class MP_Scraper(object):
             #all user links
             user_link = table_data[0].find('a')['href']
             user_id = self.get_id(user_link)
+            
+            #if somehow, we're unable to recover user_id just skip
+            if user_id == None:
+                set_trace()
+                continue
             
             user_star_rating = len(table_data[1].find_all('img'))
             
