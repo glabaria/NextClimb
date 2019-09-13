@@ -8,6 +8,7 @@ import psycopg2
 import requests
 import json
 import pickle
+import collections
 
 class MP_Scraper(object):
     def __init__(self,
@@ -16,7 +17,7 @@ class MP_Scraper(object):
                  mp_api_key,
                  start_ind=0,
                  stop_ind=-1,
-                 urlopen_delay=0.0001,
+                 urlopen_delay=0.01,
                  verbatim=False,
                  initialize_db=False):
         
@@ -238,6 +239,7 @@ class MP_Scraper(object):
         start = time.time()
         [route_link,route_name] = self.get_children(self.root_soup)
         end = time.time()
+        #set_trace()
         
         if self.verbatim:
             #print('master areas:',master_name)
@@ -252,10 +254,28 @@ class MP_Scraper(object):
         
         #self.connection.execute(query,[{'route_id': id_} for id_ in ids])
         
+        #set_trace()
         for i in range(len(ids)):
+            start = time.time()
             if ids[i] not in self.route_id_dict:
-                self.scrape_route_data(ids[i],route_link[i])
-                self.get_users_who_rated_route(route_link[i],ids[i])
+                time.sleep(self.urlopen_delay)
+                self.scrape_route_data(ids[i],route_links[i])
+                
+                time.sleep(self.urlopen_delay)
+                self.get_users_who_rated_route(route_links[i],ids[i])
+                
+            #periodically dump data
+            if i % 50 == 0:
+                #pickle dump
+                pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
+                pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
+                #
+                
+                #update user on progress
+                end = time.time()
+                if self.verbatim:
+                    print('route index ',i,' completed of ',len(ids),' in ',end-start, 'seconds')
+                
         #end add information for routes database
         
         self.connection.close()
@@ -275,16 +295,21 @@ class MP_Scraper(object):
             self.get_route_level_data(BeautifulSoup(urlopen(dirurl),'html.parser'),'div','mb-half',stop_ind=50)           
     
     def get_all_route_ids_links(self,route_link):
+        
         route_links = self.flatten(self.extract_routes(route_link))
         #set_trace()
         
-        #clean out all Nons
-        route_links = [y for y in route_links if y != None]
-        
         route_ids = []
-        for link in route_links:
+        
+        #clean out all Nons
+        if isinstance(route_links,list):
+            route_links = [y for y in route_links if y != None]
+        
+            for link in route_links:
 
-            route_ids.append(int(self.get_id(link)))
+                route_ids.append(int(self.get_id(link)))
+        else:
+            route_ids.append(int(self.get_id(route_links)))
             
         return route_ids,route_links
     
@@ -302,10 +327,28 @@ class MP_Scraper(object):
             if nest:
                 return nest
             
-    def flatten(self,nested):
-        if all(type(x) == list for x in nested):
-            return sum(map(self.flatten, nested), [])
-        return nested
+    #TODO this did not work for all cases
+#    def flatten(self,nested):
+#        if all(type(x) == list for x in nested):
+#            return sum(map(self.flatten, nested), [])
+#        return nested
+#    def flatten(self,nest):
+#        set_trace()
+#        if isinstance(nest[0],str):
+#            return nest
+#        
+#        for i in nest:
+#            if isinstance(i, list):
+#                for j in self.flatten(i):
+#                    return j
+#            else:
+#                return i
+    
+    def flatten(self,x):
+        if isinstance(x, collections.Iterable) and not isinstance(x, str):
+            return [a for i in x for a in self.flatten(i)]
+        else:
+            return [x]
     
     def scrape_route_data(self,id_,link):
         
@@ -342,7 +385,6 @@ class MP_Scraper(object):
         
     #input link of route page, outputs all the users and their ratings for that particular route
     def get_users_who_rated_route(self,link,route_id):
-        
         #stat page of route
         stats_link = link[:37]+'/stats'+link[37:]
         
