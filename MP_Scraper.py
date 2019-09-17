@@ -9,6 +9,7 @@ import requests
 import json
 import pickle
 import collections
+import numpy as np
 
 class MP_Scraper(object):
     def __init__(self,
@@ -19,7 +20,9 @@ class MP_Scraper(object):
                  stop_ind=-1,
                  urlopen_delay=0.01,
                  verbatim=False,
-                 initialize_db=False):
+                 initialize_db=False,
+                 scrape_by_radius=False,
+                 gps_location=[0,0]):
         
         page = urlopen(route_page)
         self.root_soup = BeautifulSoup(page,'html.parser')
@@ -27,6 +30,8 @@ class MP_Scraper(object):
         self.start_ind = start_ind
         self.urlopen_delay = urlopen_delay
         self.verbatim = verbatim
+        self.scrape_by_radius = scrape_by_radius
+        self.gps_location = gps_location
         self.is_area_complete_dict = {}
         
         self.engine = db.create_engine(postgre_address)
@@ -208,7 +213,7 @@ class MP_Scraper(object):
             text_master = []
         
             for laind in range(len(link_area)):            
-                time.sleep(self.urlopen_delay)
+                time.sleep(self.urlopen_delay + np.abs(np.random.normal()))
                 curr_soup = BeautifulSoup(urlopen(link_area[laind]),'html.parser')
                 
                 #set_trace()
@@ -243,47 +248,67 @@ class MP_Scraper(object):
     def scrape_MP(self):
         #[master_content, master_link, master_name] = self.find_master_area()
         
-        start = time.time()
-        [route_link,route_name] = self.get_children(self.root_soup)
-        end = time.time()
-        #set_trace()
-        
-        if self.verbatim:
-            #print('master areas:',master_name)
-            print(route_name)
-            print('time elapsed = ',end-start)
-            
-        ids,route_links = self.get_all_route_ids_links(route_link)
-        
-        #add information for routes database
-        #query = db.insert(self.routes_table)
-        
-        
-        #self.connection.execute(query,[{'route_id': id_} for id_ in ids])
-        
-        #set_trace()
-        for i in range(len(ids)):
+        if not self.scrape_by_radius:
             start = time.time()
-            if ids[i] not in self.route_id_dict:
-                time.sleep(self.urlopen_delay)
-                self.scrape_route_data(ids[i],route_links[i])
+            [route_link,route_name] = self.get_children(self.root_soup)
+            end = time.time()
+            #set_trace()
+            
+            if self.verbatim:
+                #print('master areas:',master_name)
+                print(route_name)
+                print('time elapsed = ',end-start)
                 
-                time.sleep(self.urlopen_delay)
-                self.get_users_who_rated_route(route_links[i],ids[i])
-                
-            #periodically dump data
-            if i % 50 == 0:
-                #pickle dump
-                pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
-                pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
-                #
-                
-                #update user on progress
-                end = time.time()
-                if self.verbatim:
-                    print('route index ',i,' completed of ',len(ids),' in ',end-start, 'seconds')
-                
-        #end add information for routes database
+            ids,route_links = self.get_all_route_ids_links(route_link)
+            
+            #add information for routes database
+            #query = db.insert(self.routes_table)
+            
+            
+            #self.connection.execute(query,[{'route_id': id_} for id_ in ids])
+            
+            #set_trace()
+            for i in range(len(ids)):
+                start = time.time()
+                if ids[i] not in self.route_id_dict:
+                    time.sleep(self.urlopen_delay+ np.abs(np.random.normal()))
+                    self.scrape_route_data(ids[i],route_links[i])
+                    
+                    time.sleep(self.urlopen_delay + np.abs(np.random.normal()))
+                    self.get_users_who_rated_route(route_links[i],ids[i])
+                    
+                #periodically dump data
+                if i % 50 == 0:
+                    #pickle dump
+                    pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
+                    pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
+                    #
+                    
+                    #update user on progress
+                    end = time.time()
+                    if self.verbatim:
+                        print('route index ',i,' completed of ',len(ids),' in ',end-start, 'seconds')
+                    
+        else:
+            [links,ids] = self.scrape_routes_by_radius(self.gps_location[0],self.gps_location[1])
+            #set_trace()
+            counter = 0
+            for link,id_ in zip(links, ids):
+                time.sleep(self.urlopen_delay + np.abs(np.random.normal()))
+                self.get_users_who_rated_route(link,id_)
+        
+                if counter % 50 == 0:
+                    #pickle dump
+                    pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
+                    pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
+                    #
+                    
+                    #update user on progress
+                    end = time.time()
+                    if self.verbatim:
+                        print('route index ',counter,' completed of ',len(ids))
+                        
+                counter += 1
         
         self.connection.close()
         self.engine.dispose()
@@ -320,7 +345,11 @@ class MP_Scraper(object):
                 if 'route' not in link.split('/'):
                     route_links[i] = None
                 else:
-                    route_ids.append(int(self.get_id(link)))
+                    id_ = self.get_id(link)
+                    if id_ != None:
+                        route_ids.append(int(id_))
+                    else: #for some invalid route names that don't follow similar route link structure
+                        continue
                     
             route_links = [y for y in route_links if y != None]
         else:
@@ -410,32 +439,94 @@ class MP_Scraper(object):
         content = soup.find('table',\
                            class_='table table-striped')
         
-        table_rows = content.find_all('tr')
+        if content:
         
-        #go through the ratings and add them to list
-        #user_link = []
-        #nstars = []
-        for i in range(len(table_rows)):
-            table_data = table_rows[i].find_all('td')
+            table_rows = content.find_all('tr')
             
-            #all user links
-            user_link = table_data[0].find('a')['href']
-            user_id = self.get_id(user_link)
+            #go through the ratings and add them to list
+            #user_link = []
+            #nstars = []
+            for i in range(len(table_rows)):
+                table_data = table_rows[i].find_all('td')
+                
+                #all user links
+                user_link = table_data[0].find('a')['href']
+                user_id = self.get_id(user_link)
+                
+                #if somehow, we're unable to recover user_id just skip
+                if user_id == None:
+                    #set_trace()
+                    continue
+                
+                user_star_rating = len(table_data[1].find_all('img'))
+                
+                if user_id not in self.user_id_dict:
+                    self.user_id_dict[user_id] = {route_id:user_star_rating}
+                else:
+                    self.user_id_dict[user_id][route_id] = user_star_rating
+                
+                #the corresponding user star rating of route
+                #nstars.append(len(table_data[1].find_all('img')))
+        
+    #since mountain project not responding to scraping requests, use their get routes by radius API
+    def scrape_routes_by_radius(self,lat,long):
+        url = 'https://www.mountainproject.com/data/get-routes-for-lat-lon?lat='+str(lat)+'&lon='+str(long)+'&maxDistance=200&maxResults=500&key='+self.mp_api_key
+        
+        r = requests.get(url)
+        #set_trace()
+        json_data = r.json()
+        json_data = json_data['routes']
+        
+        links = []
+        ids = []
+        
+        #set_trace()
+        for i in range(len(json_data)):
+            curr_json_data = json_data[i]
+            route_name = curr_json_data['name']
+            route_id = curr_json_data['id']
+            route_rating = curr_json_data['rating']
+            route_type = curr_json_data['type']
+            route_avg_stars = curr_json_data['stars']
+            route_n_star_votes = curr_json_data['starVotes']
+            route_pitches = curr_json_data['pitches']
+            route_location = curr_json_data['location']
+            route_long = curr_json_data['longitude']
+            route_lat = curr_json_data['latitude']
+            route_link = curr_json_data['url']
             
-            #if somehow, we're unable to recover user_id just skip
-            if user_id == None:
-                set_trace()
-                continue
+            self.route_id_dict[route_id] = {'route_name': route_name, 
+                                       'route_rating': route_rating,
+                                       'route_type': route_type,
+                                       'route_avg_stars': route_avg_stars,
+                                       'route_n_star_votes':route_n_star_votes,
+                                       'route_pitches':route_pitches,
+                                       'route_location':route_location,
+                                       'route_long':route_long,
+                                       'route_lat':route_lat,
+                                       'url':route_link}
             
-            user_star_rating = len(table_data[1].find_all('img'))
+            links.append(route_link)
+            ids.append(route_id)
             
-            if user_id not in self.user_id_dict:
-                self.user_id_dict[user_id] = {route_id:user_star_rating}
-            else:
-                self.user_id_dict[user_id][route_id] = user_star_rating
+        #set_trace()
             
-            #the corresponding user star rating of route
-            #nstars.append(len(table_data[1].find_all('img')))
+        return links, ids
+        
+    #this function will get the description, commitment grade, protection description
+    def scrape_route_details(self,route_link):
+        
+        #get description, location, and protection texts
+        r = requests.get(route_link)
+        soup = BeautifulSoup(r.text,'html5lib')
+
+        content = soup.find_all('div',class_='fr-view')
+        
+        desc = ''
+        if content:
+            for c in content:
+                desc += c
+        
         
         
 #    def scrape_MP(self):
