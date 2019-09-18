@@ -34,10 +34,10 @@ class MP_Scraper(object):
         self.gps_location = gps_location
         self.is_area_complete_dict = {}
         
-        self.engine = db.create_engine(postgre_address)
-        self.connection = self.engine.connect()
-        self.metadata = db.MetaData()
-        self.routes_table = db.Table('routes', self.metadata, autoload=True, autoload_with=self.engine)
+        #self.engine = db.create_engine(postgre_address)
+        #self.connection = self.engine.connect()
+        #self.metadata = db.MetaData()
+        #self.routes_table = db.Table('routes', self.metadata, autoload=True, autoload_with=self.engine)
         
         self.mp_api_key = mp_api_key
         
@@ -310,8 +310,8 @@ class MP_Scraper(object):
                         
                 counter += 1
         
-        self.connection.close()
-        self.engine.dispose()
+        #self.connection.close()
+        #self.engine.dispose()
         
         #pickle dump
         pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
@@ -513,8 +513,8 @@ class MP_Scraper(object):
             
         return links, ids
         
-    #this function will get the description, commitment grade, protection description
-    def scrape_route_details(self,route_link):
+    #this function will get the description, protection description, location description, and grade
+    def scrape_route_details(self,route_link, route_id):
         
         #get description, location, and protection texts
         r = requests.get(route_link)
@@ -525,10 +525,63 @@ class MP_Scraper(object):
         desc = ''
         if content:
             for c in content:
-                desc += c
+                desc += c.get_text()
         
+        self.route_id_dict[route_id]['desc'] = desc
         
+        #get commitement grade
+        content = soup.find('table',class_='description-details')
+        c = content.find_all('td')[1]
+        c = c.get_text().strip()
+        sp = c.split(',')
+        sp = sp[-1].split()
+        grade = None
+        if sp[0] == 'Grade':
+            grade = sp[1]
+            if grade == 'I':
+                num_grade = 1
+            elif grade == 'II':
+                num_grade = 2
+            elif grade == 'III':
+                num_grade = 3
+            elif grade == 'IV':
+                num_grade = 4
+            elif grade == 'V':
+                num_grade = 5
+            elif grade == 'VI':
+                num_grade = 6
+            else:
+                num_grade = None
+        else:
+            num_grade = None
+            
+        self.route_id_dict[route_id]['grade'] = num_grade
         
+    #get the details of each climbing route
+    def scrape_route_details_helper(self):
+        
+        n = len(self.route_id_dict)
+        counter = 0
+        for route_id in self.route_id_dict:
+            
+            if 'desc' not in self.route_id_dict[route_id]:
+                #time.sleep(self.urlopen_delay+ np.abs(np.random.normal()))
+                start = time.time()
+                self.scrape_route_details(self.route_id_dict[route_id]['url'], route_id)
+                end = time.time()
+                
+                if counter % 50 == 0:
+                    if self.verbatim:
+                        print('current iter = ',counter, ' of ',n,' completed in ',end-start,' seconds.')
+                    
+                    pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
+                    pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
+            
+            counter += 1
+            
+        pickle.dump(self.route_id_dict, open( "route_table.p", "wb" ) )
+        pickle.dump(self.user_id_dict, open( "user_table.p", "wb" ) )
+            
 #    def scrape_MP(self):
 #        
 #        content_route_dir, link_route_dir, text_route_dir = \
