@@ -428,7 +428,7 @@ class MP_Scraper(object):
                                    'url':link}
         
         #scrape route description, protection description, location description, and commitment grade
-        self.scrape_route_details(route_link, route_id)
+        self.scrape_route_details(link, id_)
         
     #input link of route page, outputs all the users and their ratings for that particular route
     def get_users_who_rated_route(self,link,route_id):
