@@ -427,6 +427,9 @@ class MP_Scraper(object):
                                    'route_lat':route_lat,
                                    'url':link}
         
+        #scrape route description, protection description, location description, and commitment grade
+        self.scrape_route_details(route_link, route_id)
+        
     #input link of route page, outputs all the users and their ratings for that particular route
     def get_users_who_rated_route(self,link,route_id):
         #stat page of route
@@ -509,6 +512,7 @@ class MP_Scraper(object):
             links.append(route_link)
             ids.append(route_id)
             
+            
         #set_trace()
             
         return links, ids
@@ -531,33 +535,37 @@ class MP_Scraper(object):
         
         #get commitement grade
         content = soup.find('table',class_='description-details')
-        c = content.find_all('td')[1]
-        c = c.get_text().strip()
-        sp = c.split(',')
-        sp = sp[-1].split()
-        grade = None
-        if sp[0] == 'Grade':
-            grade = sp[1]
-            if grade == 'I':
-                num_grade = 1
-            elif grade == 'II':
-                num_grade = 2
-            elif grade == 'III':
-                num_grade = 3
-            elif grade == 'IV':
-                num_grade = 4
-            elif grade == 'V':
-                num_grade = 5
-            elif grade == 'VI':
-                num_grade = 6
-            else:
-                num_grade = None
-        else:
-            num_grade = None
-            
+        
+        num_grade = None
+        if content:
+            c = content.find_all('td')[1]
+            c = c.get_text().strip()
+            sp = c.split(',')
+            sp = sp[-1].split()
+            grade = None
+            if sp:
+                if sp[0] == 'Grade':
+                    grade = sp[1]
+                    if grade == 'I':
+                        num_grade = 1
+                    elif grade == 'II':
+                        num_grade = 2
+                    elif grade == 'III':
+                        num_grade = 3
+                    elif grade == 'IV':
+                        num_grade = 4
+                    elif grade == 'V':
+                        num_grade = 5
+                    elif grade == 'VI':
+                        num_grade = 6
+                    else:
+                        num_grade = None
+                else:
+                    num_grade = None
+                
         self.route_id_dict[route_id]['grade'] = num_grade
         
-    #get the details of each climbing route
+    #get the details of each climbing route (for older routes scraped before the description, grade was scraped)
     def scrape_route_details_helper(self):
         
         n = len(self.route_id_dict)

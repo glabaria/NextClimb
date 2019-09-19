@@ -10,7 +10,7 @@ with open('MP_api_key.ini','r') as content_file:
 
 db_address = 'postgresql://postgres:'+pw+'@localhost/MountainProjectData'
 
-mp_region_url = 'https://www.mountainproject.com/area/105904319/los-angeles-basin'
+mp_region_url = 'https://www.mountainproject.com/area/105790243/san-diego'
 
 mps = MP_Scraper(mp_region_url,db_address,api_key,verbatim=False,urlopen_delay=0.0,
                  scrape_by_radius=False, gps_location=[39.109, -120.237])
