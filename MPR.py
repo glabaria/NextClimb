@@ -14,6 +14,7 @@ import string
 #import sklearn
 #from sklearn.metrics.pairwise import linear_kernel
 import requests
+import random
 from IPython.core.debugger import set_trace
 
 class MP_Recommender(object):
@@ -256,109 +257,62 @@ class MP_Recommender(object):
             
         self.similarity_dict = results
         
-    def load_prev_content_results(self, similarity_filename):
+    def load_prev_content_results(self, similarity_filename, mostpopular_filename='recs_list_popular.p'):
         self.similarity_dict = pickle.load( open( similarity_filename, "rb" ) )
         
         self.similarity_df = pd.DataFrame.from_dict(self.similarity_dict)
         
+        self.most_popular = pickle.load(open(mostpopular_filename,"rb"))
+        
     def get_content_recs(self, route_id):
         return self.similarity_df[[route_id]]
+    
+    def get_user_info_from_MP(self,user_id):
+        url = 'https://www.mountainproject.com/data/get-user?userId='+str(user_id)+'&key='+self.mp_api_key
+
+        r = requests.get(url)
+        
+        #if goes here, the user is not valid
+        if not r.text:
+            return False
+        
+        json_data = r.json()
+    
+        user_name = json_data['name']
+        user_avatar_url = json_data['avatar']
+    
+        self.user_info = {'user_name':user_name, 'user_avatar_url':user_avatar_url}
+        
+        return True
         
     #gets recommendations on climb based on collaborative and content-based filtering
-    def get_user_recs(self,user_id,make_requests=True,colab_model_filename='NMF_tuned.p',content_recs_only=False):
+    #start_top_n_index: this starts the top n rated climbs index.
+    #for example, start_top_n_index = 3 bases the content recommender on the top
+    #3,4,5,6,7 user rated climbs
+    def get_user_recs(self,user_id,make_requests=True,colab_model_filename='NMF_tuned.p',
+                      content_recs_only=False, start_top_n_index=0, start_modcounter_index=0,
+                      is_first_run=True):
         
-        if make_requests:
-            url = 'https://www.mountainproject.com/data/get-user?userId='+str(user_id)+'&key='+self.mp_api_key
-
-            r = requests.get(url)
-            json_data = r.json()
+        #flag for if the user has cycled through all the recommendations
+        self.is_last_nextrec = False
         
-            user_name = json_data['name']
-            user_avatar_url = json_data['avatar']
-        
-            self.user_info = {'user_name':user_name, 'user_avatar_url':user_avatar_url}
-            
         #deal with users not in dataset (cold-start)
-        if user_id not in df_users.index:
+        if user_id not in self.df_users.index:
+            self.is_last_nextrec = True
             
-        
-        user_routes_rated = self.df_users.iloc[self.df_users.index.get_loc(user_id),:]
-    
-        user_routes_rated = user_routes_rated[user_routes_rated.notnull()]
-        n_rated = len(user_routes_rated)
-        
-        user_routes_rated.sort_values(axis=0,ascending=False,inplace=True)
-        if n_rated >= 5:
-            top_rated = user_routes_rated[0:5]
-        else:
-            top_rated = user_routes_rated
+            if make_requests:
+                #check to make sure user is actually registered on MP
+                is_user_exist = self.get_user_info_from_MP(user_id)
+                
+            #handle not registered users
+            if not is_user_exist:
+                return None, 0
             
-        recs = []
-        
-        n_top_rated = len(top_rated)
-        max_sim = len(self.similarity_df)
-        
-        #if number of climbs user rated is >=20, this user was included in the matrix-factorization
-        #all other users treated in the cold-start problem (only based on content-based filtering)
-        if n_rated >= 20 and not content_recs_only:
-            self.load_prev_colab_results(user_id,colab_model_filename=colab_model_filename)
-            #top climbs from matrix factorization (colab based)
-            top_mf = self.df_top_climbs_mf[['route id']].to_numpy()
+            #if code is here, the user exists on MP, but has not rated any
+            #indexed routes by our system; in this case, just recommend some
+            #of the more popular routes
+            recs = random.sample(list(self.most_popular.values), 20)
             
-            #set_trace()
-            modcount = 0
-            for i in range(n_top_rated*3):
-                #set_trace()
-                
-                curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount].to_numpy()[0][1]
-                
-                #if current recommendation was already recommended recommend a different item
-                counter = 1
-                while curr_rec in recs:
-                    if modcount+counter >= max_sim:
-                        break
-                    
-                    curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount+counter].to_numpy()[0][1]
-                    counter += 1
-                recs.append(curr_rec)
-                if i%n_top_rated == 0 and i > 0:
-                    modcount += 1
-            
-            #last 5 recommendations are provided from MFs
-            for i in range(5):
-                recs.append(top_mf[i][0])
-        elif n_rated < 20 or content_recs_only:
-            modcount = 0
-            for i in range(20):
-                
-                curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount].to_numpy()[0][1]
-                
-                counter = 1
-                while curr_rec in recs:
-                    if modcount+counter >= max_sim:
-                        break
-                    curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount+counter].to_numpy()[0][1]
-                    counter += 1
-                
-                recs.append(curr_rec)
-        
-                if i%n_top_rated ==0 and i>0:
-                    modcount += 1
-        
-        if self.verbatim:
-            print('recommendations for ',user_name, '(',str(user_id),'):')
-            #print(*recs,sep='\n')
-            for i in range(len(recs)):
-                print(i+1, ') ', recs[i], 
-                     self.route_id_dict[recs[i]]['route_name'], ', ', 
-                     self.route_id_dict[recs[i]]['route_rating'], ', ', 
-                     '(',self.route_id_dict[recs[i]]['route_type'],'), ',
-                     self.route_id_dict[recs[i]]['route_pitches'],' pitches, ',
-                     'location: ', self.route_id_dict[recs[i]]['route_location'], ', ', 
-                     'url: ', self.route_id_dict[recs[i]]['url'])
-    
-        if make_requests:
-            #grab pictures for the routes from MP
             recs_img_url = {}
             for rr in recs:
                 url = 'https://www.mountainproject.com/data/get-routes?routeIds='+str(rr)+'&key='+self.mp_api_key
@@ -368,15 +322,141 @@ class MP_Recommender(object):
                 recs_img_url[rr] = json_data['routes'][0]['imgSmall']
             self.recs_img_url = recs_img_url
             
-            top_rated_img_url = []
-            for i in range(n_top_rated):
-                url = 'https://www.mountainproject.com/data/get-routes?routeIds='+str(top_rated.index[i])+'&key='+self.mp_api_key
-            
+            return recs, 0
+        
+        else:
+            if make_requests and is_first_run:
+                url = 'https://www.mountainproject.com/data/get-user?userId='+str(user_id)+'&key='+self.mp_api_key
+    
                 r = requests.get(url)
                 json_data = r.json()
+            
+                user_name = json_data['name']
+                user_avatar_url = json_data['avatar']
+            
+                self.user_info = {'user_name':user_name, 'user_avatar_url':user_avatar_url}
+            
+            if is_first_run:
+                user_routes_rated = self.df_users.iloc[self.df_users.index.get_loc(user_id),:]
+            
+                user_routes_rated = user_routes_rated[user_routes_rated.notnull()]
+                n_rated = len(user_routes_rated)
+            
+            user_routes_rated.sort_values(axis=0,ascending=False,inplace=True)
+            if n_rated >=5:
+                if n_rated >= start_top_n_index+5:
+                    top_rated = user_routes_rated[start_top_n_index:start_top_n_index+5]
+                else:
+                    while start_top_n_index+5 > n_rated:
+                        start_top_n_index -= 1
+                        
+                    top_rated = user_routes_rated[start_top_n_index:start_top_n_index+5]
+            else:
+                top_rated = user_routes_rated
                 
-                top_rated_img_url.append(json_data['routes'][0]['imgSmall'])
-            self.top_rated = top_rated #top recommended climbs from MF
-            self.top_rated_img_url = top_rated_img_url
+            recs = []
+            
+            n_top_rated = len(top_rated)
+            max_sim = len(self.similarity_df)
+            
+            #if number of climbs user rated is >=20, this user was included in the matrix-factorization
+            #all other users treated in the cold-start problem (only based on content-based filtering)
+            if n_rated >= 20 and not content_recs_only:
+                if is_first_run:
+                    self.load_prev_colab_results(user_id,colab_model_filename=colab_model_filename)
+                    #top climbs from matrix factorization (colab based)
+                    top_mf = self.df_top_climbs_mf[['route id']].to_numpy()
+                
+                #set_trace()
+                modcount = 3*start_modcounter_index
+                for i in range(n_top_rated*3):
+                    #set_trace()
+                    if modcount >= max_sim:
+                        self.is_last_nextrec = True
+                        break
+                    
+                    curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount].to_numpy()[0][1]
+                    
+                    #if current recommendation was already recommended recommend a different item
+                    counter = 1
+                    while curr_rec in recs or curr_rec in top_rated.index:
+                        if modcount+counter >= max_sim:
+                            self.is_last_nextrec = True
+                            break
+                        
+                        curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount+counter].to_numpy()[0][1]
+                        counter += 1
+                    #
+                        
+                    recs.append(curr_rec)
+                    if i%n_top_rated == 0 and i > 0:
+                        modcount += 1
+                
+                #last 5 recommendations are provided from MFs
+                if start_modcounter_index*5+5 > 20:
+                    for i in range(start_modcounter_index*5,20):
+                        recs.append(top_mf[i][0])
+                else:        
+                    for i in range(start_modcounter_index*5,start_modcounter_index*5+5):
+                        recs.append(top_mf[i][0])
+                    
+            elif n_rated < 20 or content_recs_only:
+                modcount = 3*start_modcounter_index
+                for i in range(20):
+                    if modcount >= max_sim:
+                        self.is_last_nextrec = True
+                        break
+                    
+                    curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount].to_numpy()[0][1]
+                    
+                    counter = 1
+                    while curr_rec in recs or curr_rec in top_rated.index:
+                        if modcount+counter >= max_sim:
+                            self.is_last_nextrec = True
+                            break
+                        curr_rec = self.get_content_recs(top_rated.index[i%n_top_rated]).iloc[modcount+counter].to_numpy()[0][1]
+                        counter += 1
+                    
+                    recs.append(curr_rec)
+            
+                    if i%n_top_rated ==0 and i>0:
+                        modcount += 1
+                        
+                    if modcount >= max_sim:
+                        break
+            
+            if self.verbatim:
+                print('recommendations for ',user_name, '(',str(user_id),'):')
+                #print(*recs,sep='\n')
+                for i in range(len(recs)):
+                    print(i+1, ') ', recs[i], 
+                         self.route_id_dict[recs[i]]['route_name'], ', ', 
+                         self.route_id_dict[recs[i]]['route_rating'], ', ', 
+                         '(',self.route_id_dict[recs[i]]['route_type'],'), ',
+                         self.route_id_dict[recs[i]]['route_pitches'],' pitches, ',
+                         'location: ', self.route_id_dict[recs[i]]['route_location'], ', ', 
+                         'url: ', self.route_id_dict[recs[i]]['url'])
         
+            if make_requests:
+                #grab pictures for the routes from MP
+                recs_img_url = {}
+                for rr in recs:
+                    url = 'https://www.mountainproject.com/data/get-routes?routeIds='+str(rr)+'&key='+self.mp_api_key
+                
+                    r = requests.get(url)
+                    json_data = r.json()
+                    recs_img_url[rr] = json_data['routes'][0]['imgSmall']
+                self.recs_img_url = recs_img_url
+                
+                top_rated_img_url = []
+                for i in range(n_top_rated):
+                    url = 'https://www.mountainproject.com/data/get-routes?routeIds='+str(top_rated.index[i])+'&key='+self.mp_api_key
+                
+                    r = requests.get(url)
+                    json_data = r.json()
+                    
+                    top_rated_img_url.append(json_data['routes'][0]['imgSmall'])
+                self.top_rated = top_rated #top recommended climbs from MF
+                self.top_rated_img_url = top_rated_img_url
+            
         return recs,n_top_rated
